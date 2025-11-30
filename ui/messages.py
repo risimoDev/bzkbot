@@ -48,3 +48,27 @@ def admin_prompt_schedule(hour: int, minute: int) -> str:
 
 def schedule_updated(hour: int, minute: int) -> str:
     return f"✅ Время рассылки обновлено: {hour:02d}:{minute:02d}"
+
+def admin_prompt_status_visibility() -> str:
+    return ("👁 Введите управление видимостью статуса:\n"
+            "`tg_id show` или `tg_id hide`\nНапример: `123456789 hide`")
+
+def status_visibility_changed(tg_id: int, show: bool) -> str:
+    return f"✅ Статус для {tg_id} теперь: {'показывать' if show else 'скрывать'}"
+
+def admin_users_list(title: str, users: list[dict]) -> str:
+    lines = ["👥 " + title]
+    if not users:
+        lines.append("(Нет пользователей)")
+    for u in users:
+        lines.append(
+            f"ID:{u['id']} TG:{u['tg_id']} "
+            f"{'✔' if u['active'] else '✖'} "
+            f"STS:{'👁' if u['show_status'] else '🙈'} "
+            f"DUES:{'🔔' if u['dues'] else '🚫'} VPN:{'🔔' if u['vpn'] else '🚫'}"
+        )
+    lines.append("\nНажмите номер для управления (пока через ввод команды или кнопку действия).")
+    return "\n".join(lines)
+
+def admin_user_status_toggled(tg_id: int, show: bool) -> str:
+    return f"🔄 Видимость статуса для {tg_id}: {'показывать' if show else 'скрывать'}"

@@ -12,8 +12,9 @@ from apscheduler.triggers.cron import CronTrigger
 from bot_config import config
 from db.dao import DAO
 from services.reminders import send_daily_reminders, ack_callback_data
-from ui.keyboards import main_menu, notifications_menu, admin_menu, reply_menu_button, status_toggle_menu
-from ui.messages import welcome_message, access_granted_message, access_denied_message, status_message, admin_prompt_paid, admin_prompt_savings, saved_message, marked_message, admin_prompt_schedule, schedule_updated, status_hidden_message
+from ui.keyboards import main_menu, notifications_menu, admin_menu, reply_menu_button, status_toggle_menu, admin_users_page_keyboard, admin_user_actions_keyboard
+from ui.messages import welcome_message, access_granted_message, access_denied_message, status_message, admin_prompt_paid, admin_prompt_savings, saved_message, marked_message, admin_prompt_schedule, schedule_updated, status_hidden_message, admin_prompt_status_visibility, status_visibility_changed, admin_users_list, admin_user_status_toggled
+ADMIN_USERS_PAGE_SIZE = 10
 
 bot = Bot(token=config.bot_token)
 dp = Dispatcher()
@@ -32,6 +33,9 @@ class AdminSavings(StatesGroup):
     waiting_input = State()
 
 class AdminSchedule(StatesGroup):
+    waiting_input = State()
+
+class AdminStatusVisibility(StatesGroup):
     waiting_input = State()
 
 @dp.message(Command("start"))
@@ -166,7 +170,8 @@ async def menu_status(cb: CallbackQuery):
 @dp.callback_query(F.data == "menu_notifications")
 async def menu_notifications(cb: CallbackQuery):
     user = await dao.get_or_create_user(cb.from_user.id)
-    kb = notifications_menu(user.allow_dues_notifications, user.allow_vpn_notifications)
+    show = await dao.get_show_status(user.id)
+    kb = notifications_menu(user.allow_dues_notifications, user.allow_vpn_notifications, show)
     await cb.message.edit_text("🔔 Уведомления", reply_markup=kb)
     await cb.answer()
 @dp.callback_query(F.data == "toggle_status")
@@ -185,8 +190,75 @@ async def toggle_status(cb: CallbackQuery):
         await cb.message.edit_text(text, reply_markup=status_toggle_menu(new_show))
     await cb.answer("Сохранено")
 
+@dp.callback_query(F.data == "admin_status_visibility")
+async def admin_status_visibility(cb: CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in config.admin_ids:
+        await cb.answer("Недостаточно прав", show_alert=True)
+        return
+    await state.set_state(AdminStatusVisibility.waiting_input)
+    await cb.message.edit_text(admin_prompt_status_visibility(), parse_mode="Markdown")
+    await cb.answer()
+
+@dp.message(AdminStatusVisibility.waiting_input)
+async def handle_admin_status_visibility(message: Message, state: FSMContext):
+    try:
+        raw_tg_id, mode = (message.text or "").strip().split()
+        tg_id = int(raw_tg_id)
+        mode = mode.lower()
+        if mode not in ("show", "hide"):
+            raise ValueError()
+    except Exception:
+        await message.answer("Формат: `tg_id show|hide`", parse_mode="Markdown")
+        return
+    u = await dao.get_or_create_user(tg_id)
+    await dao.set_show_status(u.id, mode == "show")
+    await state.clear()
+    await message.answer(status_visibility_changed(tg_id, mode == "show"))
+
 @dp.callback_query(F.data == "menu_admin")
 async def menu_admin(cb: CallbackQuery):
+    @dp.callback_query(F.data.startswith("admin_users_page_"))
+    async def admin_users_page(cb: CallbackQuery):
+        if cb.from_user.id not in config.admin_ids:
+            await cb.answer("Недостаточно прав", show_alert=True)
+            return
+        try:
+            page = int(cb.data.split("_")[-1])
+        except Exception:
+            page = 1
+        total = await dao.total_users()
+        total_pages = max(1, (total + ADMIN_USERS_PAGE_SIZE - 1) // ADMIN_USERS_PAGE_SIZE)
+        page = max(1, min(page, total_pages))
+        users = await dao.users_page(page, ADMIN_USERS_PAGE_SIZE)
+        text = admin_users_list(f"Пользователи (страница {page})", users)
+        kb = admin_users_page_keyboard(page, total_pages)
+        await cb.message.edit_text(text, reply_markup=kb)
+        await cb.answer()
+
+    @dp.callback_query(F.data.startswith("admin_toggle_user_status_"))
+    async def admin_toggle_user_status(cb: CallbackQuery):
+        if cb.from_user.id not in config.admin_ids:
+            await cb.answer("Недостаточно прав", show_alert=True)
+            return
+        try:
+            user_id = int(cb.data.split("_")[-1])
+        except Exception:
+            await cb.answer("Ошибка ID")
+            return
+        # Получаем tg_id
+        async with aiosqlite.connect(config.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT id, tg_id, show_status FROM users WHERE id=?", (user_id,))
+            row = await cur.fetchone()
+        if not row:
+            await cb.answer("Не найден")
+            return
+        current_show = bool(row["show_status"])
+        await dao.set_show_status(row["id"], not current_show)
+        new_show = await dao.get_show_status(row["id"])
+        await cb.message.edit_text(admin_user_status_toggled(row["tg_id"], new_show), reply_markup=admin_user_actions_keyboard(row["id"], new_show))
+        await cb.answer("Готово")
+
     if cb.from_user.id not in config.admin_ids:
         await cb.answer("Недостаточно прав", show_alert=True)
         return

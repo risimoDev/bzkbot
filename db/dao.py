@@ -51,6 +51,11 @@ class DAO:
     async def init(self):
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(SCHEMA)
+            # Миграция: добавить столбец show_status если отсутствует
+            cur = await db.execute("PRAGMA table_info(users)")
+            cols = [r[1] for r in await cur.fetchall()]
+            if "show_status" not in cols:
+                await db.execute("ALTER TABLE users ADD COLUMN show_status INTEGER NOT NULL DEFAULT 1")
             await db.commit()
 
     async def get_or_create_user(self, tg_id: int) -> User:
@@ -89,6 +94,33 @@ class DAO:
             cur = await db.execute("SELECT show_status FROM users WHERE id=?", (user_id,))
             row = await cur.fetchone()
             return bool(row[0]) if row else True
+
+    async def total_users(self) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT COUNT(*) FROM users")
+            row = await cur.fetchone()
+            return int(row[0]) if row else 0
+
+    async def users_page(self, page: int, page_size: int):
+        offset = (page - 1) * page_size
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT id, tg_id, is_active, show_status, allow_dues_notifications, allow_vpn_notifications FROM users ORDER BY id LIMIT ? OFFSET ?",
+                (page_size, offset)
+            )
+            rows = await cur.fetchall()
+            return [
+                {
+                    "id": r["id"],
+                    "tg_id": r["tg_id"],
+                    "active": bool(r["is_active"]),
+                    "show_status": bool(r["show_status"]),
+                    "dues": bool(r["allow_dues_notifications"]),
+                    "vpn": bool(r["allow_vpn_notifications"]),
+                }
+                for r in rows
+            ]
 
     async def record_payment(self, user_id: int, type_: str, amount: int, paid_at: str):
         async with aiosqlite.connect(self.db_path) as db:
