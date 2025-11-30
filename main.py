@@ -12,8 +12,8 @@ from apscheduler.triggers.cron import CronTrigger
 from bot_config import config
 from db.dao import DAO
 from services.reminders import send_daily_reminders, ack_callback_data
-from ui.keyboards import main_menu, notifications_menu, admin_menu, reply_menu_button
-from ui.messages import welcome_message, access_granted_message, access_denied_message, status_message, admin_prompt_paid, admin_prompt_savings, saved_message, marked_message, admin_prompt_schedule, schedule_updated
+from ui.keyboards import main_menu, notifications_menu, admin_menu, reply_menu_button, status_toggle_menu
+from ui.messages import welcome_message, access_granted_message, access_denied_message, status_message, admin_prompt_paid, admin_prompt_savings, saved_message, marked_message, admin_prompt_schedule, schedule_updated, status_hidden_message
 
 bot = Bot(token=config.bot_token)
 dp = Dispatcher()
@@ -150,12 +150,17 @@ async def handle_text(message: Message):
 # Главное меню
 @dp.callback_query(F.data == "menu_status")
 async def menu_status(cb: CallbackQuery):
-    total_dues = await dao.get_total_collected("dues")
-    total_vpn = await dao.get_total_collected("vpn")
-    savings = await dao.get_savings()
-    text = status_message(total_dues, total_vpn, savings)
-    kb = main_menu(is_admin=cb.from_user.id in config.admin_ids)
-    await cb.message.edit_text(text, reply_markup=kb)
+    u = await dao.get_or_create_user(cb.from_user.id)
+    show = await dao.get_show_status(u.id)
+    if not show:
+        await cb.message.edit_text(status_hidden_message(), reply_markup=status_toggle_menu(show))
+    else:
+        total_dues = await dao.get_total_collected("dues")
+        total_vpn = await dao.get_total_collected("vpn")
+        savings = await dao.get_savings()
+        text = status_message(total_dues, total_vpn, savings)
+        kb = status_toggle_menu(True)
+        await cb.message.edit_text(text, reply_markup=kb)
     await cb.answer()
 
 @dp.callback_query(F.data == "menu_notifications")
@@ -164,6 +169,21 @@ async def menu_notifications(cb: CallbackQuery):
     kb = notifications_menu(user.allow_dues_notifications, user.allow_vpn_notifications)
     await cb.message.edit_text("🔔 Уведомления", reply_markup=kb)
     await cb.answer()
+@dp.callback_query(F.data == "toggle_status")
+async def toggle_status(cb: CallbackQuery):
+    u = await dao.get_or_create_user(cb.from_user.id)
+    show = await dao.get_show_status(u.id)
+    await dao.set_show_status(u.id, not show)
+    new_show = await dao.get_show_status(u.id)
+    if not new_show:
+        await cb.message.edit_text(status_hidden_message(), reply_markup=status_toggle_menu(new_show))
+    else:
+        total_dues = await dao.get_total_collected("dues")
+        total_vpn = await dao.get_total_collected("vpn")
+        savings = await dao.get_savings()
+        text = status_message(total_dues, total_vpn, savings)
+        await cb.message.edit_text(text, reply_markup=status_toggle_menu(new_show))
+    await cb.answer("Сохранено")
 
 @dp.callback_query(F.data == "menu_admin")
 async def menu_admin(cb: CallbackQuery):

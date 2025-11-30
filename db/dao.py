@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS users (
   tg_id INTEGER UNIQUE NOT NULL,
   is_active INTEGER NOT NULL DEFAULT 0,
   allow_dues_notifications INTEGER NOT NULL DEFAULT 1,
-  allow_vpn_notifications INTEGER NOT NULL DEFAULT 1
+    allow_vpn_notifications INTEGER NOT NULL DEFAULT 1,
+    show_status INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS payments (
@@ -77,6 +78,17 @@ class DAO:
             if vpn is not None:
                 await db.execute("UPDATE users SET allow_vpn_notifications=? WHERE id=?", (1 if vpn else 0, user_id))
             await db.commit()
+
+    async def set_show_status(self, user_id: int, show: bool):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE users SET show_status=? WHERE id=?", (1 if show else 0, user_id))
+            await db.commit()
+
+    async def get_show_status(self, user_id: int) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT show_status FROM users WHERE id=?", (user_id,))
+            row = await cur.fetchone()
+            return bool(row[0]) if row else True
 
     async def record_payment(self, user_id: int, type_: str, amount: int, paid_at: str):
         async with aiosqlite.connect(self.db_path) as db:

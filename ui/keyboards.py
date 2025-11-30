@@ -16,6 +16,12 @@ def notifications_menu(allow_dues: bool, allow_vpn: bool) -> InlineKeyboardMarku
         [InlineKeyboardButton(text="Назад", callback_data="back_main")]
     ])
 
+def status_toggle_menu(show_status: bool) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=("Статус: показывать" if show_status else "Статус: скрывать"), callback_data="toggle_status")],
+        [InlineKeyboardButton(text="Назад", callback_data="back_main")]
+    ])
+
 def admin_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Отметить оплату сбора", callback_data="admin_paid_dues")],

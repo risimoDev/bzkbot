@@ -18,6 +18,9 @@ def status_message(total_dues: int, total_vpn: int, savings: int) -> str:
         f"• Сберегательный счёт: {savings}₽"
     )
 
+def status_hidden_message() -> str:
+    return "🙈 Статус скрыт. Вы можете включить его в настройках."
+
 def reminder_text(type_: str, dues_amount: int) -> str:
     if type_ == "dues":
         return f"🔔 Ежемесячный сбор: {dues_amount}₽. Нажмите кнопку ниже, когда прочитаете."
