@@ -1,0 +1,19 @@
+version: "3.9"
+services:
+  bzkbot:
+    build: .
+    container_name: bzkbot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/data
+    networks:
+      - bzk_net
+    healthcheck:
+      test: ["CMD", "python", "-c", "print('ok')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+networks:
+  bzk_net:
+    driver: bridge
