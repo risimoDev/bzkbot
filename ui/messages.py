@@ -41,6 +41,12 @@ def admin_prompt_vpn_amount(current: int) -> str:
 def admin_vpn_amount_updated(amount: int) -> str:
     return f"✅ Сумма VPN обновлена: {amount}₽"
 
+def admin_prompt_dues_amount(current: int) -> str:
+    return f"📥 Текущая сумма сбора: {current}₽\nВведите новую сумму (целое число ≥ 0):"
+
+def admin_dues_amount_updated(amount: int) -> str:
+    return f"✅ Сумма сбора обновлена: {amount}₽"
+
 def saved_message() -> str:
     return "✅ Сохранено"
 

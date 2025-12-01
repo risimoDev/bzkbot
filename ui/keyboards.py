@@ -28,6 +28,7 @@ def admin_menu() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="Отметить оплату сбора", callback_data="admin_paid_dues")],
         [InlineKeyboardButton(text="Отметить оплату VPN", callback_data="admin_paid_vpn")],
         [InlineKeyboardButton(text="Сберегательный счёт", callback_data="admin_savings")],
+        [InlineKeyboardButton(text="Сумма сбора", callback_data="admin_dues_amount")],
         [InlineKeyboardButton(text="Сумма VPN", callback_data="admin_vpn_amount")],
         [InlineKeyboardButton(text="Время рассылки", callback_data="admin_schedule")],
         [InlineKeyboardButton(text="Видимость статуса", callback_data="admin_status_visibility")],
