@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from datetime import time
+import re
 import aiosqlite
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery
@@ -552,13 +553,13 @@ async def handle_admin_schedule_input(message: Message, state: FSMContext):
 
 @dp.message(AdminVpnAmount.waiting_input)
 async def handle_admin_vpn_amount_input(message: Message, state: FSMContext):
-    try:
-        amount = int((message.text or "").strip())
-        if amount < 0:
-            raise ValueError()
-    except Exception:
+    raw = (message.text or "").strip()
+    # Извлекаем первую последовательность цифр (поддержка форматов "250", "250р", "250 ₽" и пр.)
+    m = re.search(r"\d+", raw)
+    if not m:
         await message.answer("Введите целое число (>=0)")
         return
+    amount = int(m.group(0))
     await dao.set_vpn_amount(amount)
     # Пересоздать задачу с новой суммой (время берём из настроек)
     hour, minute = await dao.get_schedule_time()
@@ -575,6 +576,9 @@ async def handle_admin_vpn_amount_input(message: Message, state: FSMContext):
     )
     await state.clear()
     await message.answer(admin_vpn_amount_updated(amount))
+    # Показать повторно админ-меню для удобства
+    kb = admin_menu()
+    await message.answer("🛠 Админ-панель", reply_markup=kb)
 
 # Обработка ввода для FSM
 @dp.message(AdminPaidDues.waiting_input)
