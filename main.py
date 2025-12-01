@@ -12,8 +12,8 @@ from apscheduler.triggers.cron import CronTrigger
 from bot_config import config
 from db.dao import DAO
 from services.reminders import send_daily_reminders, ack_callback_data
-from ui.keyboards import main_menu, notifications_menu, admin_menu, reply_menu_button, status_toggle_menu, admin_users_page_keyboard, admin_user_actions_keyboard
-from ui.messages import welcome_message, access_granted_message, access_denied_message, status_message, admin_prompt_paid, admin_prompt_savings, saved_message, marked_message, admin_prompt_schedule, schedule_updated, status_hidden_message, admin_prompt_status_visibility, status_visibility_changed, admin_users_list, admin_user_status_toggled
+from ui.keyboards import main_menu, notifications_menu, admin_menu, reply_menu_button, status_toggle_menu, admin_users_page_keyboard, admin_user_actions_keyboard, custom_notify_audience_keyboard, custom_history_page_keyboard, batch_actions_keyboard, ack_custom_keyboard
+from ui.messages import welcome_message, access_granted_message, access_denied_message, status_message, admin_prompt_paid, admin_prompt_savings, saved_message, marked_message, admin_prompt_schedule, schedule_updated, status_hidden_message, admin_prompt_status_visibility, status_visibility_changed, admin_users_list, admin_user_status_toggled, component_toggled, custom_notify_intro, custom_notify_enter_ids, custom_notify_enter_text, custom_notify_sent, custom_notify_invalid_ids, custom_history_list, batch_resend_result, custom_acknowledged
 ADMIN_USERS_PAGE_SIZE = 10
 
 bot = Bot(token=config.bot_token)
@@ -37,6 +37,12 @@ class AdminSchedule(StatesGroup):
 
 class AdminStatusVisibility(StatesGroup):
     waiting_input = State()
+
+class AdminCustomAudience(StatesGroup):
+    waiting_ids = State()
+    waiting_text_all = State()
+    waiting_text_list = State()
+    waiting_text_resend = State()
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
@@ -156,13 +162,21 @@ async def handle_text(message: Message):
 async def menu_status(cb: CallbackQuery):
     u = await dao.get_or_create_user(cb.from_user.id)
     show = await dao.get_show_status(u.id)
+    vis = await dao.get_component_visibility(u.id)
     if not show:
         await cb.message.edit_text(status_hidden_message(), reply_markup=status_toggle_menu(show))
     else:
         total_dues = await dao.get_total_collected("dues")
         total_vpn = await dao.get_total_collected("vpn")
         savings = await dao.get_savings()
-        text = status_message(total_dues, total_vpn, savings)
+        parts = ["📊 Статус"]
+        if vis["dues"]:
+            parts.append(f"• Сборы: {total_dues}₽")
+        if vis["vpn"]:
+            parts.append(f"• VPN: {total_vpn}₽")
+        if vis["savings"]:
+            parts.append(f"• Сберегательный счёт: {savings}₽")
+        text = "\n".join(parts)
         kb = status_toggle_menu(True)
         await cb.message.edit_text(text, reply_markup=kb)
     await cb.answer()
@@ -198,6 +212,136 @@ async def admin_status_visibility(cb: CallbackQuery, state: FSMContext):
     await state.set_state(AdminStatusVisibility.waiting_input)
     await cb.message.edit_text(admin_prompt_status_visibility(), parse_mode="Markdown")
     await cb.answer()
+
+@dp.callback_query(F.data == "admin_custom_notification")
+async def admin_custom_notification(cb: CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in config.admin_ids:
+        await cb.answer("Недостаточно прав", show_alert=True)
+        return
+    await cb.message.edit_text(custom_notify_intro(), reply_markup=custom_notify_audience_keyboard())
+    await cb.answer()
+
+@dp.callback_query(F.data == "custom_audience_all")
+async def custom_audience_all(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(AdminCustomAudience.waiting_text_all)
+    await cb.message.edit_text(custom_notify_enter_text("все активные"))
+    await cb.answer()
+
+@dp.callback_query(F.data == "custom_audience_list")
+async def custom_audience_list(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(AdminCustomAudience.waiting_ids)
+    await cb.message.edit_text(custom_notify_enter_ids())
+    await cb.answer()
+
+@dp.message(AdminCustomAudience.waiting_ids)
+async def custom_audience_ids_input(message: Message, state: FSMContext):
+    raw = (message.text or "").replace("\n", " ")
+    parts = [p.strip() for p in raw.replace(",", " ").split() if p.strip()]
+    try:
+        ids = [int(p) for p in parts]
+    except Exception:
+        await message.answer(custom_notify_invalid_ids())
+        return
+    await state.update_data(tg_ids=ids)
+    await state.set_state(AdminCustomAudience.waiting_text_list)
+    await message.answer(custom_notify_enter_text(f"{len(ids)} пользователей"))
+
+@dp.message(AdminCustomAudience.waiting_text_all)
+async def custom_notify_text_all(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Текст не может быть пустым")
+        return
+    ids = await dao.active_user_ids()
+    from datetime import datetime
+    sent_at = datetime.now().isoformat()
+    import uuid
+    batch_id = uuid.uuid4().hex
+    created = await dao.create_custom_notifications_batch(text, ids, sent_at, batch_id)
+    count = 0
+    for tg_id, notif_id in created:
+        try:
+            await bot.send_message(tg_id, text, reply_markup=ack_custom_keyboard(notif_id))
+            count += 1
+        except Exception:
+            pass
+    await state.clear()
+    await message.answer(custom_notify_sent(count))
+
+@dp.message(AdminCustomAudience.waiting_text_list)
+async def custom_notify_text_list(message: Message, state: FSMContext):
+    data = await state.get_data()
+    ids: list[int] = data.get("tg_ids", [])
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Текст не может быть пустым")
+        return
+    from datetime import datetime
+    sent_at = datetime.now().isoformat()
+    import uuid
+    batch_id = uuid.uuid4().hex
+    created = await dao.create_custom_notifications_batch(text, ids, sent_at, batch_id)
+    count = 0
+    for tg_id, notif_id in created:
+        try:
+            await bot.send_message(tg_id, text, reply_markup=ack_custom_keyboard(notif_id))
+            count += 1
+        except Exception:
+            pass
+    await state.clear()
+    await message.answer(custom_notify_sent(count))
+
+@dp.callback_query(F.data.startswith("admin_custom_history_"))
+async def custom_history(cb: CallbackQuery):
+    if cb.from_user.id not in config.admin_ids:
+        await cb.answer("Недостаточно прав", show_alert=True)
+        return
+    try:
+        page = int(cb.data.split("_")[-1])
+    except Exception:
+        page = 1
+    total_batches = await dao.count_batches()
+    PAGE_SIZE = 5
+    total_pages = max(1, (total_batches + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = max(1, min(page, total_pages))
+    batches = await dao.list_batches(page, PAGE_SIZE)
+    text = custom_history_list(f"История (стр. {page})", batches)
+    kb = custom_history_page_keyboard(page, total_pages)
+    await cb.message.edit_text(text, reply_markup=kb)
+    await cb.answer()
+
+@dp.callback_query(F.data.startswith("resend_batch_"))
+async def resend_batch(cb: CallbackQuery):
+    if cb.from_user.id not in config.admin_ids:
+        await cb.answer("Недостаточно прав", show_alert=True)
+        return
+    batch_id = cb.data.replace("resend_batch_", "")
+    unacked = await dao.unacked_in_batch(batch_id)
+    attempted = len(unacked)
+    sent = 0
+    for item in unacked:
+        try:
+            notif = await dao.get_custom_notif(item["notif_id"])
+            if notif:
+                await bot.send_message(item["tg_id"], notif["text"], reply_markup=ack_custom_keyboard(item["notif_id"]))
+                sent += 1
+        except Exception:
+            pass
+    await cb.message.edit_text(batch_resend_result(batch_id, attempted, sent), reply_markup=batch_actions_keyboard(batch_id))
+    await cb.answer("Готово")
+
+@dp.callback_query(F.data.startswith("ackc_"))
+async def ack_custom(cb: CallbackQuery):
+    notif_id = cb.data.replace("ackc_", "")
+    try:
+        notif_id_int = int(notif_id)
+    except ValueError:
+        await cb.answer("Ошибка", show_alert=True)
+        return
+    user = await dao.get_or_create_user(cb.from_user.id)
+    await dao.acknowledge_custom(user.id, notif_id_int)
+    await cb.message.edit_text(custom_acknowledged())
+    await cb.answer("OK")
 
 @dp.message(AdminStatusVisibility.waiting_input)
 async def handle_admin_status_visibility(message: Message, state: FSMContext):
@@ -257,6 +401,34 @@ async def menu_admin(cb: CallbackQuery):
         await dao.set_show_status(row["id"], not current_show)
         new_show = await dao.get_show_status(row["id"])
         await cb.message.edit_text(admin_user_status_toggled(row["tg_id"], new_show), reply_markup=admin_user_actions_keyboard(row["id"], new_show))
+        await cb.answer("Готово")
+
+    @dp.callback_query(F.data.startswith("admin_toggle_component_"))
+    async def admin_toggle_component(cb: CallbackQuery):
+        if cb.from_user.id not in config.admin_ids:
+            await cb.answer("Недостаточно прав", show_alert=True)
+            return
+        parts = cb.data.split("_")
+        try:
+            component = parts[3]
+            user_id = int(parts[4])
+        except Exception:
+            await cb.answer("Ошибка данных")
+            return
+        async with aiosqlite.connect(config.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT id, tg_id FROM users WHERE id=?", (user_id,))
+            row = await cur.fetchone()
+        if not row:
+            await cb.answer("Не найден")
+            return
+        await dao.toggle_component(user_id, component)
+        vis = await dao.get_component_visibility(user_id)
+        show_status = await dao.get_show_status(user_id)
+        await cb.message.edit_text(
+            component_toggled(row["tg_id"], component, vis[component]),
+            reply_markup=admin_user_actions_keyboard(row["id"], show_status)
+        )
         await cb.answer("Готово")
 
     if cb.from_user.id not in config.admin_ids:
