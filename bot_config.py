@@ -10,6 +10,7 @@ class Config:
     access_phrase: str = os.getenv("ACCESS_PHRASE", "")
     admin_ids: list[int] = field(default_factory=list)
     dues_amount: int = int(os.getenv("DUES_AMOUNT", "500"))
+    vpn_amount: int = int(os.getenv("VPN_AMOUNT", "0"))
     timezone: str = os.getenv("TIMEZONE", "Europe/Moscow")
     db_path: str = os.getenv("DB_PATH", "bzkbot.db")
 

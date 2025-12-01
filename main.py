@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from datetime import time
+import aiosqlite
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.state import State, StatesGroup
@@ -13,7 +14,7 @@ from bot_config import config
 from db.dao import DAO
 from services.reminders import send_daily_reminders, ack_callback_data
 from ui.keyboards import main_menu, notifications_menu, admin_menu, reply_menu_button, status_toggle_menu, admin_users_page_keyboard, admin_user_actions_keyboard, custom_notify_audience_keyboard, custom_history_page_keyboard, batch_actions_keyboard, ack_custom_keyboard
-from ui.messages import welcome_message, access_granted_message, access_denied_message, status_message, admin_prompt_paid, admin_prompt_savings, saved_message, marked_message, admin_prompt_schedule, schedule_updated, status_hidden_message, admin_prompt_status_visibility, status_visibility_changed, admin_users_list, admin_user_status_toggled, component_toggled, custom_notify_intro, custom_notify_enter_ids, custom_notify_enter_text, custom_notify_sent, custom_notify_invalid_ids, custom_history_list, batch_resend_result, custom_acknowledged
+from ui.messages import welcome_message, access_granted_message, access_denied_message, status_message, admin_prompt_paid, admin_prompt_savings, saved_message, marked_message, admin_prompt_schedule, schedule_updated, status_hidden_message, admin_prompt_status_visibility, status_visibility_changed, admin_users_list, admin_user_status_toggled, component_toggled, custom_notify_intro, custom_notify_enter_ids, custom_notify_enter_text, custom_notify_sent, custom_notify_invalid_ids, custom_history_list, batch_resend_result, custom_acknowledged, admin_prompt_vpn_amount, admin_vpn_amount_updated
 ADMIN_USERS_PAGE_SIZE = 10
 
 bot = Bot(token=config.bot_token)
@@ -43,6 +44,9 @@ class AdminCustomAudience(StatesGroup):
     waiting_text_all = State()
     waiting_text_list = State()
     waiting_text_resend = State()
+
+class AdminVpnAmount(StatesGroup):
+    waiting_input = State()
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
@@ -450,7 +454,8 @@ async def toggle_dues(cb: CallbackQuery):
     user = await dao.get_or_create_user(cb.from_user.id)
     await dao.set_notifications(user.id, dues=not user.allow_dues_notifications)
     user = await dao.get_or_create_user(cb.from_user.id)
-    kb = notifications_menu(user.allow_dues_notifications, user.allow_vpn_notifications)
+    show = await dao.get_show_status(user.id)
+    kb = notifications_menu(user.allow_dues_notifications, user.allow_vpn_notifications, show)
     await cb.message.edit_reply_markup(reply_markup=kb)
     await cb.answer("Сохранено")
 
@@ -459,7 +464,8 @@ async def toggle_vpn(cb: CallbackQuery):
     user = await dao.get_or_create_user(cb.from_user.id)
     await dao.set_notifications(user.id, vpn=not user.allow_vpn_notifications)
     user = await dao.get_or_create_user(cb.from_user.id)
-    kb = notifications_menu(user.allow_dues_notifications, user.allow_vpn_notifications)
+    show = await dao.get_show_status(user.id)
+    kb = notifications_menu(user.allow_dues_notifications, user.allow_vpn_notifications, show)
     await cb.message.edit_reply_markup(reply_markup=kb)
     await cb.answer("Сохранено")
 
@@ -501,6 +507,19 @@ async def admin_schedule(cb: CallbackQuery, state: FSMContext):
     await cb.message.edit_text(admin_prompt_schedule(hour, minute), parse_mode="Markdown")
     await cb.answer()
 
+@dp.callback_query(F.data == "admin_vpn_amount")
+async def admin_vpn_amount(cb: CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in config.admin_ids:
+        await cb.answer("Недостаточно прав", show_alert=True)
+        return
+    current = await dao.get_vpn_amount()
+    # если в БД пусто (0), но в конфиге задано (>0), покажем конфиг как подсказку
+    if current == 0 and config.vpn_amount > 0:
+        current = config.vpn_amount
+    await state.set_state(AdminVpnAmount.waiting_input)
+    await cb.message.edit_text(admin_prompt_vpn_amount(current), parse_mode="Markdown")
+    await cb.answer()
+
 @dp.message(AdminSchedule.waiting_input)
 async def handle_admin_schedule_input(message: Message, state: FSMContext):
     try:
@@ -518,15 +537,44 @@ async def handle_admin_schedule_input(message: Message, state: FSMContext):
         scheduler.remove_job("daily_reminders")
     except Exception:
         pass
+    vpn_amt = await dao.get_vpn_amount()
+    if vpn_amt == 0 and config.vpn_amount > 0:
+        vpn_amt = config.vpn_amount
     scheduler.add_job(
         send_daily_reminders,
         CronTrigger(hour=hour, minute=minute, timezone=config.timezone),
-        args=[bot, dao, config.timezone, config.dues_amount],
+        args=[bot, dao, config.timezone, config.dues_amount, vpn_amt],
         id="daily_reminders",
         replace_existing=True,
     )
     await state.clear()
     await message.answer(schedule_updated(hour, minute))
+
+@dp.message(AdminVpnAmount.waiting_input)
+async def handle_admin_vpn_amount_input(message: Message, state: FSMContext):
+    try:
+        amount = int((message.text or "").strip())
+        if amount < 0:
+            raise ValueError()
+    except Exception:
+        await message.answer("Введите целое число (>=0)")
+        return
+    await dao.set_vpn_amount(amount)
+    # Пересоздать задачу с новой суммой (время берём из настроек)
+    hour, minute = await dao.get_schedule_time()
+    try:
+        scheduler.remove_job("daily_reminders")
+    except Exception:
+        pass
+    scheduler.add_job(
+        send_daily_reminders,
+        CronTrigger(hour=hour, minute=minute, timezone=config.timezone),
+        args=[bot, dao, config.timezone, config.dues_amount, amount],
+        id="daily_reminders",
+        replace_existing=True,
+    )
+    await state.clear()
+    await message.answer(admin_vpn_amount_updated(amount))
 
 # Обработка ввода для FSM
 @dp.message(AdminPaidDues.waiting_input)
@@ -584,10 +632,15 @@ async def on_startup():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     logging.info("Bot startup: init DB and scheduler")
     hour, minute = await dao.get_schedule_time()
+    vpn_amt = await dao.get_vpn_amount()
+    # Инициализация из конфига если в БД не задано
+    if vpn_amt == 0 and config.vpn_amount > 0:
+        await dao.set_vpn_amount(config.vpn_amount)
+        vpn_amt = config.vpn_amount
     scheduler.add_job(
         send_daily_reminders,
         CronTrigger(hour=hour, minute=minute, timezone=config.timezone),
-        args=[bot, dao, config.timezone, config.dues_amount],
+        args=[bot, dao, config.timezone, config.dues_amount, vpn_amt],
         id="daily_reminders",
         replace_existing=True,
     )

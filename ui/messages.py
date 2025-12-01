@@ -21,9 +21,11 @@ def status_message(total_dues: int, total_vpn: int, savings: int) -> str:
 def status_hidden_message() -> str:
     return "🙈 Статус скрыт. Вы можете включить его в настройках."
 
-def reminder_text(type_: str, dues_amount: int) -> str:
+def reminder_text(type_: str, dues_amount: int, vpn_amount: int) -> str:
     if type_ == "dues":
         return f"🔔 Ежемесячный сбор: {dues_amount}₽. Нажмите кнопку ниже, когда прочитаете."
+    if vpn_amount > 0:
+        return f"🔔 Оплата VPN: {vpn_amount}₽. Нажмите кнопку ниже, когда прочитаете."
     return "🔔 Оплата VPN: проверьте актуальность. Нажмите кнопку ниже, когда прочитаете."
 
 def admin_prompt_paid(type_: str) -> str:
@@ -32,6 +34,12 @@ def admin_prompt_paid(type_: str) -> str:
 
 def admin_prompt_savings() -> str:
     return "💰 Введите новую сумму сберегательного счёта (в ₽):"
+
+def admin_prompt_vpn_amount(current: int) -> str:
+    return f"🌐 Текущая сумма VPN: {current}₽\nВведите новую сумму (целое число, 0 чтобы убрать из текста):"
+
+def admin_vpn_amount_updated(amount: int) -> str:
+    return f"✅ Сумма VPN обновлена: {amount}₽"
 
 def saved_message() -> str:
     return "✅ Сохранено"

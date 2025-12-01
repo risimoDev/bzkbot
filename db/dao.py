@@ -305,6 +305,17 @@ class DAO:
             row = await cur.fetchone()
             return int(row[0]) if row and row[0] is not None else 0
 
+    async def set_vpn_amount(self, amount: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("INSERT INTO settings(key,value) VALUES('vpn_amount',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(amount),))
+            await db.commit()
+
+    async def get_vpn_amount(self) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute("SELECT value FROM settings WHERE key='vpn_amount'")
+            row = await cur.fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+
     async def upsert_reminder(self, user_id: int, type_: str, acknowledged: bool, last_sent_at: Optional[str]):
         async with aiosqlite.connect(self.db_path) as db:
             cur = await db.execute("SELECT id FROM reminders WHERE user_id=? AND type=?", (user_id, type_))
